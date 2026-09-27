@@ -1,0 +1,6 @@
+openapi: 3.1.0
+info:
+  title: IP Infrastructure API
+  version: 0.0.0-placeholder
+  description: Шов backend ↔ frontend (B1/I4). Владелец — координатор. Заполняется после Handoff; потребители до готовности работают от моков из схем (B2).
+paths: {}

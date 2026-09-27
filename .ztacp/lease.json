@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "holder": "coord",
+  "acquired_at": "2026-09-27T13:07:48Z",
+  "renewed_at": "2026-09-27T13:07:48Z",
+  "ttl": "72h",
+  "grace": "24h",
+  "succession": ["backend", "frontend"],
+  "takeover_log": []
+}
