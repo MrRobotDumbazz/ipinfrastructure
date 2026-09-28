@@ -1,145 +1,387 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { MOCK_IP_ASSETS, MOCK_TRADES } from "@/lib/mocks";
+import {
+  MockApiClient,
+  type IpAsset,
+  type TradeOrder,
+  type TradeStatus,
+} from "@/lib/mocks";
 
-// MOCK (B2) — replace with API calls per contracts/openapi.yaml once populated
-
-const STATUS_COLOUR: Record<string, string> = {
-  open: "text-yellow-400 bg-yellow-900/20 border-yellow-700/40",
-  completed: "text-green-400 bg-green-900/20 border-green-700/40",
-  cancelled: "text-red-400 bg-red-900/20 border-red-700/40",
+const STATUS_BADGE_STYLE: Record<TradeStatus, string> = {
+  open: "text-amber-400 bg-amber-950/40 border-amber-600/40",
+  completed: "text-emerald-400 bg-emerald-950/40 border-emerald-600/40",
+  cancelled: "text-rose-400 bg-rose-950/40 border-rose-600/40",
 };
 
 export default function TradePage() {
-  const { connected } = useWallet();
-  const [selectedIp, setSelectedIp] = useState(MOCK_IP_ASSETS[0]?.id ?? "");
-  const [priceSol, setPriceSol] = useState("1");
-  const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
+  const { connected, publicKey } = useWallet();
+  const [assets, setAssets] = useState<IpAsset[]>([]);
+  const [trades, setTrades] = useState<TradeOrder[]>([]);
 
-  async function handleList(e: React.FormEvent) {
+  // Form fields per contracts/openapi.yaml: CreateTradeRequest
+  const [selectedIpId, setSelectedIpId] = useState("");
+  const [priceSol, setPriceSol] = useState("1.5");
+  const [submitting, setSubmitting] = useState(false);
+  const [actionInProgressId, setActionInProgressId] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+
+  // Filter tabs
+  const [filterTab, setFilterTab] = useState<"all" | "open" | "my">("all");
+
+  useEffect(() => {
+    const refreshData = () => {
+      const loadedAssets = MockApiClient.getAssets();
+      setAssets(loadedAssets);
+      if (loadedAssets.length > 0 && !selectedIpId) {
+        setSelectedIpId(loadedAssets[0].id);
+      }
+      setTrades(MockApiClient.getTrades());
+    };
+
+    refreshData();
+    window.addEventListener("ip_store_updated", refreshData);
+    return () => window.removeEventListener("ip_store_updated", refreshData);
+  }, [selectedIpId]);
+
+  async function handleCreateTrade(e: React.FormEvent) {
     e.preventDefault();
-    if (!connected) return;
+    if (!connected || !publicKey) {
+      setStatusMessage({
+        type: "error",
+        text: "Please connect your wallet first.",
+      });
+      return;
+    }
+
+    if (!selectedIpId) {
+      setStatusMessage({
+        type: "error",
+        text: "Please select an IP asset to list for sale.",
+      });
+      return;
+    }
+
+    const price = parseFloat(priceSol);
+    if (isNaN(price) || price < 0.000000001) {
+      setStatusMessage({
+        type: "error",
+        text: "Price must be at least 0.000000001 SOL per OpenAPI schema.",
+      });
+      return;
+    }
+
     setSubmitting(true);
-    setResult(null);
-    await new Promise((r) => setTimeout(r, 800));
-    setResult(
-      `[MOCK] Listed ${selectedIp} for ${priceSol} SOL. Fake tx: 5abc...${Date.now().toString(36)}`
-    );
-    setSubmitting(false);
+    setStatusMessage(null);
+
+    try {
+      await new Promise((r) => setTimeout(r, 600));
+
+      const newOrder = MockApiClient.createTrade(
+        {
+          ipAssetId: selectedIpId,
+          priceInSol: price,
+        },
+        publicKey.toBase58()
+      );
+
+      setStatusMessage({
+        type: "success",
+        text: `[MOCK B2] Listed asset ${newOrder.ipAssetId} for ${newOrder.priceInSol} SOL (Order: ${newOrder.id}).`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to create trade order";
+      setStatusMessage({ type: "error", text: msg });
+    } finally {
+      setSubmitting(false);
+    }
   }
 
+  async function handleBuy(orderId: string) {
+    if (!connected || !publicKey) {
+      setStatusMessage({
+        type: "error",
+        text: "Please connect your wallet to purchase this asset.",
+      });
+      return;
+    }
+
+    setActionInProgressId(orderId);
+    setStatusMessage(null);
+
+    try {
+      await new Promise((r) => setTimeout(r, 800));
+      const completed = MockApiClient.buyTrade(orderId, publicKey.toBase58());
+      setStatusMessage({
+        type: "success",
+        text: `[MOCK B2] Successfully purchased ${completed.ipAssetId} for ${completed.priceInSol} SOL! Tx: ${completed.txSignature}`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Purchase failed";
+      setStatusMessage({ type: "error", text: msg });
+    } finally {
+      setActionInProgressId(null);
+    }
+  }
+
+  async function handleCancel(orderId: string) {
+    if (!connected || !publicKey) return;
+
+    setActionInProgressId(orderId);
+    setStatusMessage(null);
+
+    try {
+      await new Promise((r) => setTimeout(r, 500));
+      MockApiClient.cancelTrade(orderId, publicKey.toBase58());
+      setStatusMessage({
+        type: "success",
+        text: `[MOCK B2] Trade order ${orderId} cancelled.`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Cancel failed";
+      setStatusMessage({ type: "error", text: msg });
+    } finally {
+      setActionInProgressId(null);
+    }
+  }
+
+  const myPubkey = publicKey?.toBase58();
+
+  const filteredTrades = trades.filter((t) => {
+    if (filterTab === "open") return t.status === "open";
+    if (filterTab === "my") return myPubkey && (t.seller === myPubkey || t.buyer === myPubkey);
+    return true;
+  });
+
   return (
-    <div className="mx-auto max-w-2xl">
-      <h1 className="mb-2 text-2xl font-bold">Trade IP</h1>
-      <p className="mb-6 text-sm text-gray-400">
-        List IP assets for sale or purchase. Data from{" "}
-        <span className="font-mono text-brand-light">mocks.ts</span> (B2).
-      </p>
+    <div className="mx-auto max-w-3xl">
+      <div className="mb-6 flex flex-col gap-1">
+        <h1 className="text-3xl font-extrabold tracking-tight">Trade IP</h1>
+        <p className="text-sm text-gray-400">
+          Peer-to-peer marketplace for intellectual property assets. Schema conforms to{" "}
+          <span className="font-mono text-brand-light">
+            contracts/openapi.yaml #/components/schemas/TradeOrder
+          </span>
+          .
+        </p>
+      </div>
 
-      {/* List for sale */}
+      {/* List For Sale Form */}
       <form
-        onSubmit={handleList}
-        className="mb-8 flex flex-col gap-4 rounded-xl border border-surface-border bg-surface-card p-6"
+        onSubmit={handleCreateTrade}
+        className="mb-10 flex flex-col gap-5 rounded-2xl border border-surface-border bg-surface-card p-6 shadow-xl"
       >
-        <h2 className="font-semibold text-white">List for sale</h2>
+        <div className="flex items-center justify-between border-b border-surface-border pb-3">
+          <span className="text-sm font-semibold text-white">
+            List IP for Sale
+          </span>
+          <span className="rounded bg-brand/10 px-2 py-0.5 text-xs font-mono text-brand-light">
+            POST /api/v1/trade/orders
+          </span>
+        </div>
 
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium uppercase text-gray-500">
-            IP Asset
+        {/* IP Asset Selection */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+            Select IP Asset <span className="text-red-400">*</span>
           </label>
-          <select
-            value={selectedIp}
-            onChange={(e) => setSelectedIp(e.target.value)}
-            className="w-full rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm text-white focus:border-brand focus:outline-none"
+          {assets.length === 0 ? (
+            <p className="rounded-lg border border-yellow-700/50 bg-yellow-950/20 p-3 text-xs text-yellow-300">
+              No registered assets available.
+            </p>
+          ) : (
+            <select
+              value={selectedIpId}
+              onChange={(e) => setSelectedIpId(e.target.value)}
+              className="rounded-lg border border-surface-border bg-surface px-3.5 py-2.5 text-sm text-white focus:border-brand focus:outline-none transition-colors"
+            >
+              {assets.map((asset) => (
+                <option key={asset.id} value={asset.id}>
+                  {asset.title} ({asset.type.toUpperCase()}) — ID: {asset.id}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {/* Price in SOL */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+            Price in SOL <span className="text-red-400">*</span>
+          </label>
+          <div className="relative">
+            <input
+              type="number"
+              min="0.000000001"
+              step="any"
+              required
+              value={priceSol}
+              onChange={(e) => setPriceSol(e.target.value)}
+              className="w-full rounded-lg border border-surface-border bg-surface px-3.5 py-2.5 text-sm text-white focus:border-brand focus:outline-none transition-colors"
+            />
+            <span className="absolute right-3.5 top-2.5 text-xs font-semibold text-gray-400">
+              SOL
+            </span>
+          </div>
+          <span className="text-[11px] text-gray-500">
+            Minimum: 0.000000001 SOL (1 lamport)
+          </span>
+        </div>
+
+        {/* Status Message */}
+        {statusMessage && (
+          <div
+            className={`rounded-lg p-3 text-xs ${
+              statusMessage.type === "success"
+                ? "border border-green-700 bg-green-950/40 text-green-300"
+                : "border border-red-700 bg-red-950/40 text-red-300"
+            }`}
           >
-            {MOCK_IP_ASSETS.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.title}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium uppercase text-gray-500">
-            Price (SOL)
-          </label>
-          <input
-            type="number"
-            min="0.001"
-            step="0.001"
-            required
-            value={priceSol}
-            onChange={(e) => setPriceSol(e.target.value)}
-            className="rounded-lg border border-surface-border bg-surface px-3 py-2 text-sm text-white focus:border-brand focus:outline-none"
-          />
-        </div>
-
-        {!connected && (
-          <p className="text-sm text-yellow-400">Connect wallet to list.</p>
+            {statusMessage.text}
+          </div>
         )}
 
+        {/* Submit */}
         <button
           type="submit"
-          disabled={!connected || submitting}
-          className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={!connected || submitting || assets.length === 0}
+          className="rounded-lg bg-brand py-2.5 text-sm font-semibold text-white shadow-lg transition-all hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {submitting ? "Listing…" : "List for sale"}
+          {submitting ? "Creating listing on-chain (MOCK)..." : "Create Trade Listing"}
         </button>
 
-        {result && (
-          <p className="rounded-lg border border-green-700 bg-green-900/30 p-3 text-xs text-green-400">
-            {result}
+        {!connected && (
+          <p className="text-center text-xs text-yellow-400">
+            Connect your wallet to list assets for sale.
           </p>
         )}
       </form>
 
-      {/* Active trades */}
-      <h2 className="mb-3 text-lg font-semibold">
-        Marketplace{" "}
-        <span className="text-xs font-normal text-gray-500">[MOCK B2]</span>
-      </h2>
-      <ul className="flex flex-col gap-3">
-        {MOCK_TRADES.map((trade) => (
-          <li
-            key={trade.id}
-            className="rounded-xl border border-surface-border bg-surface-card p-4"
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1">
-                <p className="font-medium text-white">
-                  {MOCK_IP_ASSETS.find((a) => a.id === trade.ipAssetId)
-                    ?.title ?? trade.ipAssetId}
-                </p>
-                <p className="mt-0.5 text-xs text-gray-500">
-                  Seller: {trade.seller}
-                </p>
-              </div>
-              <div className="flex flex-col items-end gap-1">
-                <span className="text-sm font-bold text-white">
-                  {trade.priceInSol} SOL
-                </span>
-                <span
-                  className={`rounded border px-2 py-0.5 text-xs font-medium ${STATUS_COLOUR[trade.status]}`}
-                >
-                  {trade.status}
-                </span>
-              </div>
-            </div>
-            {trade.status === "open" && connected && (
+      {/* Marketplace Listings */}
+      <div>
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-xl font-bold">Marketplace Orders</h2>
+
+          {/* Filter Tabs */}
+          <div className="flex rounded-lg border border-surface-border bg-surface p-1">
+            {(["all", "open", "my"] as const).map((tab) => (
               <button
-                onClick={() => alert("[MOCK B2] Buy flow not yet implemented")}
-                className="mt-3 w-full rounded-lg border border-brand/50 px-3 py-1.5 text-xs font-semibold text-brand-light transition-colors hover:bg-brand/10"
+                key={tab}
+                onClick={() => setFilterTab(tab)}
+                className={`rounded-md px-3 py-1 text-xs font-medium capitalize transition-colors ${
+                  filterTab === tab
+                    ? "bg-brand text-white"
+                    : "text-gray-400 hover:text-white"
+                }`}
               >
-                Buy
+                {tab === "my" ? "My Orders" : tab}
               </button>
-            )}
-          </li>
-        ))}
-      </ul>
+            ))}
+          </div>
+        </div>
+
+        {filteredTrades.length === 0 ? (
+          <div className="rounded-xl border border-surface-border bg-surface-card p-8 text-center text-gray-400">
+            No orders match the selected filter.
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {filteredTrades.map((trade) => {
+              const matchedAsset = assets.find((a) => a.id === trade.ipAssetId);
+              const isSeller = myPubkey && trade.seller === myPubkey;
+              const isBusy = actionInProgressId === trade.id;
+
+              return (
+                <div
+                  key={trade.id}
+                  className="flex flex-col gap-3 rounded-xl border border-surface-border bg-surface-card p-5 transition-colors hover:border-brand/40"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-semibold text-white text-base">
+                          {matchedAsset?.title ?? trade.ipAssetId}
+                        </h3>
+                        <span
+                          className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase ${STATUS_BADGE_STYLE[trade.status]}`}
+                        >
+                          {trade.status}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-gray-400">
+                        Seller:{" "}
+                        <span className="font-mono text-gray-300">
+                          {trade.seller.slice(0, 4)}...{trade.seller.slice(-4)}
+                        </span>
+                        {isSeller && (
+                          <span className="ml-1.5 text-[11px] text-brand-light">
+                            (You)
+                          </span>
+                        )}
+                        {trade.buyer && (
+                          <>
+                            {" "}
+                            · Buyer:{" "}
+                            <span className="font-mono text-gray-300">
+                              {trade.buyer.slice(0, 4)}...{trade.buyer.slice(-4)}
+                            </span>
+                          </>
+                        )}
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <span className="text-lg font-bold text-white">
+                        {trade.priceInSol} SOL
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1 border-t border-surface-border/50 pt-2 text-[11px] text-gray-400">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-gray-500">
+                        Order ID: {trade.id}
+                      </span>
+                      {trade.txSignature && (
+                        <span className="truncate font-mono text-gray-400">
+                          Tx: {trade.txSignature.slice(0, 8)}...
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  {trade.status === "open" && connected && (
+                    <div className="flex items-center gap-2 pt-1">
+                      {!isSeller ? (
+                        <button
+                          onClick={() => handleBuy(trade.id)}
+                          disabled={isBusy}
+                          className="w-full rounded-lg bg-emerald-600/90 py-2 text-xs font-semibold text-white shadow transition-all hover:bg-emerald-500 disabled:opacity-50"
+                        >
+                          {isBusy ? "Processing Buy (MOCK)..." : `Buy for ${trade.priceInSol} SOL`}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleCancel(trade.id)}
+                          disabled={isBusy}
+                          className="w-full rounded-lg border border-rose-700/60 bg-rose-950/20 py-1.5 text-xs font-semibold text-rose-300 transition-all hover:bg-rose-900/40 disabled:opacity-50"
+                        >
+                          {isBusy ? "Cancelling..." : "Cancel Listing"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
