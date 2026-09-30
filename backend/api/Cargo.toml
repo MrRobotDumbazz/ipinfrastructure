@@ -1,0 +1,21 @@
+[package]
+name = "ip-api"
+version = "0.1.0"
+description = "IP Infrastructure API layer per contracts/openapi.yaml v0.1"
+edition = "2021"
+
+[dependencies]
+ip-registry = { path = "../onchain/programs/ip-registry" }
+anchor-client = "1.1"
+anchor-lang = "1.1"
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bs58 = "0.5"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+solana-keypair = "3.1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
