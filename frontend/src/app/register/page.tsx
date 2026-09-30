@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { ApiClient, type DataSource } from "@/lib/api";
 import {
-  MockApiClient,
   computeSha256Hex,
   type IpAsset,
   type IpType,
@@ -12,6 +12,8 @@ import {
 export default function RegisterPage() {
   const { connected, publicKey } = useWallet();
   const [assets, setAssets] = useState<IpAsset[]>([]);
+  const [dataSource, setDataSource] = useState<DataSource>("mock");
+  const [loading, setLoading] = useState(true);
 
   // Form fields per contracts/openapi.yaml: RegisterIpRequest
   const [title, setTitle] = useState("");
@@ -24,11 +26,20 @@ export default function RegisterPage() {
   const [statusMessage, setStatusMessage] = useState<{
     type: "success" | "error";
     text: string;
+    source?: DataSource;
   } | null>(null);
 
+  async function loadData() {
+    setLoading(true);
+    const resp = await ApiClient.listIpAssets();
+    setAssets(resp.data);
+    setDataSource(resp.source);
+    setLoading(false);
+  }
+
   useEffect(() => {
-    setAssets(MockApiClient.getAssets());
-    const handleUpdate = () => setAssets(MockApiClient.getAssets());
+    loadData();
+    const handleUpdate = () => loadData();
     window.addEventListener("ip_store_updated", handleUpdate);
     return () => window.removeEventListener("ip_store_updated", handleUpdate);
   }, []);
@@ -98,10 +109,7 @@ export default function RegisterPage() {
     setStatusMessage(null);
 
     try {
-      // Simulate on-chain / API latency
-      await new Promise((r) => setTimeout(r, 600));
-
-      const created = MockApiClient.registerAsset(
+      const resp = await ApiClient.registerIp(
         {
           title: title.trim(),
           type: ipType,
@@ -111,9 +119,11 @@ export default function RegisterPage() {
         publicKey.toBase58()
       );
 
+      const created = resp.data;
       setStatusMessage({
         type: "success",
-        text: `[MOCK B2] Successfully registered "${created.title}" (ID: ${created.id}). Tx: ${created.txSignature}`,
+        text: `[${resp.source.toUpperCase()}] Successfully registered "${created.title}" (ID: ${created.id}). Tx: ${created.txSignature || "on-chain recorded"}`,
+        source: resp.source,
       });
 
       // Reset form
@@ -121,6 +131,7 @@ export default function RegisterPage() {
       setContentHash("");
       setUri("");
       setRawTextToHash("");
+      await loadData();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to register IP";
       setStatusMessage({ type: "error", text: msg });
@@ -151,9 +162,20 @@ export default function RegisterPage() {
           <span className="text-sm font-semibold text-white">
             Asset Information
           </span>
-          <span className="rounded bg-brand/10 px-2 py-0.5 text-xs font-mono text-brand-light">
-            POST /api/v1/ip/register
-          </span>
+          <div className="flex items-center gap-2">
+            <span
+              className={`rounded px-2 py-0.5 text-xs font-mono border ${
+                dataSource === "backend"
+                  ? "bg-emerald-950/40 border-emerald-600/50 text-emerald-300"
+                  : "bg-amber-950/40 border-amber-600/50 text-amber-300"
+              }`}
+            >
+              Mode: {dataSource === "backend" ? "Live API" : "Mock Fallback"}
+            </span>
+            <span className="rounded bg-brand/10 px-2 py-0.5 text-xs font-mono text-brand-light">
+              POST /api/v1/ip/register
+            </span>
+          </div>
         </div>
 
         {/* Title */}
@@ -290,7 +312,7 @@ export default function RegisterPage() {
           disabled={!connected || submitting}
           className="rounded-lg bg-brand py-2.5 text-sm font-semibold text-white shadow-lg transition-all hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {submitting ? "Processing on-chain (MOCK)..." : "Register IP Asset"}
+          {submitting ? "Processing..." : "Register IP Asset"}
         </button>
 
         {!connected && (
@@ -303,13 +325,28 @@ export default function RegisterPage() {
       {/* List of Registered Assets */}
       <div>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-bold">Registered IP Assets</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-bold">Registered IP Assets</h2>
+            <span
+              className={`rounded px-2 py-0.5 text-[11px] font-medium border ${
+                dataSource === "backend"
+                  ? "border-emerald-600/50 bg-emerald-950/40 text-emerald-300"
+                  : "border-amber-600/50 bg-amber-950/40 text-amber-300"
+              }`}
+            >
+              Source: {dataSource}
+            </span>
+          </div>
           <span className="rounded bg-surface-card px-2.5 py-1 text-xs text-gray-400 border border-surface-border">
             Total: {assets.length}
           </span>
         </div>
 
-        {assets.length === 0 ? (
+        {loading ? (
+          <div className="rounded-xl border border-surface-border bg-surface-card p-8 text-center text-gray-400">
+            Loading IP assets...
+          </div>
+        ) : assets.length === 0 ? (
           <div className="rounded-xl border border-surface-border bg-surface-card p-8 text-center text-gray-400">
             No registered assets found.
           </div>
@@ -339,7 +376,7 @@ export default function RegisterPage() {
                     </p>
                   </div>
                   <span className="text-xs text-gray-500">
-                    {new Date(asset.registeredAt).toLocaleDateString()}
+                    {asset.registeredAt ? new Date(asset.registeredAt).toLocaleDateString() : ""}
                   </span>
                 </div>
 
@@ -363,12 +400,14 @@ export default function RegisterPage() {
                       </a>
                     </div>
                   )}
-                  <div className="flex items-center gap-1.5 overflow-hidden">
-                    <span className="font-semibold text-gray-500">Tx:</span>
-                    <span className="truncate font-mono text-gray-400">
-                      {asset.txSignature}
-                    </span>
-                  </div>
+                  {asset.txSignature && (
+                    <div className="flex items-center gap-1.5 overflow-hidden">
+                      <span className="font-semibold text-gray-500">Tx:</span>
+                      <span className="truncate font-mono text-gray-400">
+                        {asset.txSignature}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

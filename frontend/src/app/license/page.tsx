@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { ApiClient, type DataSource } from "@/lib/api";
 import {
-  MockApiClient,
   type IpAsset,
   type License,
   type LicenseType,
@@ -13,6 +13,8 @@ export default function LicensePage() {
   const { connected, publicKey } = useWallet();
   const [assets, setAssets] = useState<IpAsset[]>([]);
   const [licenses, setLicenses] = useState<License[]>([]);
+  const [dataSource, setDataSource] = useState<DataSource>("mock");
+  const [loading, setLoading] = useState(true);
 
   // Form fields per contracts/openapi.yaml: IssueLicenseRequest
   const [selectedIpId, setSelectedIpId] = useState("");
@@ -25,18 +27,27 @@ export default function LicensePage() {
   const [statusMessage, setStatusMessage] = useState<{
     type: "success" | "error";
     text: string;
+    source?: DataSource;
   } | null>(null);
 
-  useEffect(() => {
-    const refreshData = () => {
-      const loadedAssets = MockApiClient.getAssets();
-      setAssets(loadedAssets);
-      if (loadedAssets.length > 0 && !selectedIpId) {
-        setSelectedIpId(loadedAssets[0].id);
-      }
-      setLicenses(MockApiClient.getLicenses());
-    };
+  async function refreshData() {
+    setLoading(true);
+    const [assetsResp, licResp] = await Promise.all([
+      ApiClient.listIpAssets(),
+      ApiClient.listLicenses(),
+    ]);
 
+    setAssets(assetsResp.data);
+    setLicenses(licResp.data);
+    setDataSource(licResp.source === "backend" || assetsResp.source === "backend" ? "backend" : "mock");
+
+    if (assetsResp.data.length > 0 && !selectedIpId) {
+      setSelectedIpId(assetsResp.data[0].id);
+    }
+    setLoading(false);
+  }
+
+  useEffect(() => {
     refreshData();
     window.addEventListener("ip_store_updated", refreshData);
     return () => window.removeEventListener("ip_store_updated", refreshData);
@@ -74,9 +85,7 @@ export default function LicensePage() {
     setStatusMessage(null);
 
     try {
-      await new Promise((r) => setTimeout(r, 600));
-
-      const newLicense = MockApiClient.issueLicense(
+      const resp = await ApiClient.issueLicense(
         {
           ipAssetId: selectedIpId,
           licenseType,
@@ -86,13 +95,16 @@ export default function LicensePage() {
         licensee
       );
 
+      const newLicense = resp.data;
       setStatusMessage({
         type: "success",
-        text: `[MOCK B2] Successfully issued ${licenseType} licence for asset ${selectedIpId}. Tx: ${newLicense.txSignature}`,
+        text: `[${resp.source.toUpperCase()}] Successfully issued ${licenseType} licence for asset ${selectedIpId}. Tx: ${newLicense.txSignature || "recorded"}`,
+        source: resp.source,
       });
 
       setCustomLicensee("");
       setExpiresAt("");
+      await refreshData();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to issue license";
       setStatusMessage({ type: "error", text: msg });
@@ -125,9 +137,20 @@ export default function LicensePage() {
           <span className="text-sm font-semibold text-white">
             Licence Terms
           </span>
-          <span className="rounded bg-brand/10 px-2 py-0.5 text-xs font-mono text-brand-light">
-            POST /api/v1/ip/licenses
-          </span>
+          <div className="flex items-center gap-2">
+            <span
+              className={`rounded px-2 py-0.5 text-xs font-mono border ${
+                dataSource === "backend"
+                  ? "bg-emerald-950/40 border-emerald-600/50 text-emerald-300"
+                  : "bg-amber-950/40 border-amber-600/50 text-amber-300"
+              }`}
+            >
+              Mode: {dataSource === "backend" ? "Live API" : "Mock Fallback"}
+            </span>
+            <span className="rounded bg-brand/10 px-2 py-0.5 text-xs font-mono text-brand-light">
+              POST /api/v1/ip/licenses
+            </span>
+          </div>
         </div>
 
         {/* IP Asset Selection */}
@@ -271,7 +294,7 @@ export default function LicensePage() {
           disabled={!connected || submitting || assets.length === 0}
           className="rounded-lg bg-brand py-2.5 text-sm font-semibold text-white shadow-lg transition-all hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {submitting ? "Issuing on-chain (MOCK)..." : "Issue Licence"}
+          {submitting ? "Issuing on-chain..." : "Issue Licence"}
         </button>
 
         {!connected && (
@@ -284,13 +307,28 @@ export default function LicensePage() {
       {/* Active Licenses List */}
       <div>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-bold">Active Licences</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xl font-bold">Active Licences</h2>
+            <span
+              className={`rounded px-2 py-0.5 text-[11px] font-medium border ${
+                dataSource === "backend"
+                  ? "border-emerald-600/50 bg-emerald-950/40 text-emerald-300"
+                  : "border-amber-600/50 bg-amber-950/40 text-amber-300"
+              }`}
+            >
+              Source: {dataSource}
+            </span>
+          </div>
           <span className="rounded bg-surface-card px-2.5 py-1 text-xs text-gray-400 border border-surface-border">
             Total: {licenses.length}
           </span>
         </div>
 
-        {licenses.length === 0 ? (
+        {loading ? (
+          <div className="rounded-xl border border-surface-border bg-surface-card p-8 text-center text-gray-400">
+            Loading licences...
+          </div>
+        ) : licenses.length === 0 ? (
           <div className="rounded-xl border border-surface-border bg-surface-card p-8 text-center text-gray-400">
             No active licences found.
           </div>
@@ -339,12 +377,14 @@ export default function LicensePage() {
                       <span className="font-semibold text-gray-500">Asset ID:</span>
                       <span className="font-mono text-gray-300">{lic.ipAssetId}</span>
                     </div>
-                    <div className="flex items-center gap-1.5 overflow-hidden">
-                      <span className="font-semibold text-gray-500">Tx:</span>
-                      <span className="truncate font-mono text-gray-400">
-                        {lic.txSignature}
-                      </span>
-                    </div>
+                    {lic.txSignature && (
+                      <div className="flex items-center gap-1.5 overflow-hidden">
+                        <span className="font-semibold text-gray-500">Tx:</span>
+                        <span className="truncate font-mono text-gray-400">
+                          {lic.txSignature}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

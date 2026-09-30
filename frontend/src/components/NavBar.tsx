@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import WalletButton from "./WalletButton";
+import ApiStatusIndicator from "./ApiStatusIndicator";
 
 const NAV_LINKS = [
   { href: "/", label: "Home" },
@@ -13,7 +14,7 @@ const NAV_LINKS = [
 
 /**
  * Top navigation bar.
- * Active route is highlighted. Wallet connect button on the right.
+ * Active route is highlighted. Backend API status indicator & Wallet connect on the right.
  */
 export default function NavBar() {
   const pathname = usePathname();
@@ -52,8 +53,11 @@ export default function NavBar() {
           })}
         </ul>
 
-        {/* Wallet */}
-        <WalletButton />
+        {/* Controls: API Health Status + Wallet */}
+        <div className="flex items-center gap-3">
+          <ApiStatusIndicator />
+          <WalletButton />
+        </div>
       </nav>
     </header>
   );
