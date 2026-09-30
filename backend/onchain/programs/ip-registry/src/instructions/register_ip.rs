@@ -23,6 +23,7 @@ pub fn handle_register_ip(ctx: Context<RegisterIp>, params: RegisterIpParams) ->
 
     let record = &mut ctx.accounts.ip_record;
     record.owner = ctx.accounts.payer.key();
+    record.asset_type = params.asset_type;
     record.content_hash = params.content_hash;
     record.title = params.title;
     record.uri = params.uri;

@@ -44,6 +44,7 @@ fn test_register_ip() {
         program_id,
         &ip_registry::instruction::RegisterIp {
             params: ip_registry::state::RegisterIpParams {
+                asset_type: ip_registry::state::AssetType::Patent,
                 title: "Whitepaper v1".to_string(),
                 content_hash,
                 uri: "ipfs://bafy example".to_string(),
@@ -69,6 +70,7 @@ fn test_register_ip() {
     let mut data: &[u8] = &account.data;
     let state = ip_registry::state::IpRecord::try_deserialize(&mut data).unwrap();
     assert_eq!(state.owner, payer.pubkey());
+    assert_eq!(state.asset_type, ip_registry::state::AssetType::Patent);
     assert_eq!(state.content_hash, content_hash);
     assert_eq!(state.title, "Whitepaper v1");
     assert_eq!(state.uri, "ipfs://bafy example");
@@ -100,6 +102,7 @@ fn test_register_ip_rejects_zero_content_hash() {
         program_id,
         &ip_registry::instruction::RegisterIp {
             params: ip_registry::state::RegisterIpParams {
+                asset_type: ip_registry::state::AssetType::Patent,
                 title: "Whitepaper v1".to_string(),
                 content_hash,
                 uri: "ipfs://bafy example".to_string(),
